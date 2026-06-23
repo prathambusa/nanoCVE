@@ -1,0 +1,16 @@
+# Corpus cache and model runs — too large for git
+data/cache/
+runs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# OS
+.DS_Store
