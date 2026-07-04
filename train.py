@@ -397,6 +397,7 @@ def main():
     parser.add_argument("--batch_size",    type=int,   default=None)
     parser.add_argument("--max_iters",     type=int,   default=None)
     parser.add_argument("--eval_interval", type=int,   default=None)
+    parser.add_argument("--eval_iters",    type=int,   default=None)
     parser.add_argument("--learning_rate", type=float, default=None)
     parser.add_argument("--seed",          type=int,   default=None)
 

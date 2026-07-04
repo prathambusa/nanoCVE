@@ -70,7 +70,8 @@ def _fetch_page(start_index: int, api_key: str | None) -> dict:
         headers["apiKey"] = api_key
 
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=60) as resp:
+    # NVD can be slow under load; 120s covers observed ~37s response times
+    with urllib.request.urlopen(req, timeout=120) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
@@ -94,9 +95,18 @@ def download_all_cves(limit: int | None, api_key: str | None) -> list[tuple[str,
     Paginate through the NVD API 2.0 and collect all (cve_id, description) pairs.
     Respects rate limits automatically.
     """
-    # First request to learn total count
+    # First request to learn total count. If the key returns 404 (not yet
+    # activated), automatically fall back to unauthenticated mode.
     print("  Probing API for total CVE count...", end=" ", flush=True)
-    first_page = _fetch_page(0, api_key)
+    try:
+        first_page = _fetch_page(0, api_key)
+    except urllib.error.HTTPError as e:
+        if e.code == 404 and api_key:
+            print(f"\n  API key returned 404 (not yet activated) — falling back to no-key mode")
+            api_key = None
+            first_page = _fetch_page(0, api_key)
+        else:
+            raise
     total = first_page["totalResults"]
     print(f"{total:,} CVEs available")
 
