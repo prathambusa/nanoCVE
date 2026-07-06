@@ -180,11 +180,12 @@ Two tokenizers are implemented and configurable via `--tokenizer char` or `--tok
 | Avg tokens per description | ~196 | ~46 |
 | Model params (6L-6H-384E) | ~11M | ~30M |
 | Training time (2000 steps) | **8.1 min** | 30.1 min |
-| Val loss at 2000 steps | **0.950** † | 2.900 † |
+| Val loss at 2000 steps | 0.926 † | 2.900 † |
+| **Bits-per-character (BPC)** | 1.336 | **0.989** |
 | Train/val gap at 2000 steps | 0.074 | 0.752 |
 | Sample quality | Coherent words and CVE structure; slightly blurrier version numbers | Crisper word choice; better product/version specificity |
 
-† **Val losses are not directly comparable.** Cross-entropy is measured over different vocabularies: the random-init baseline is ln(97) ≈ 4.57 nats for char vs ln(50,257) ≈ 10.82 nats for BPE. A fair comparison requires converting to bits-per-character, where both models are on equal footing.
+† **Val losses are not directly comparable across tokenizers.** Cross-entropy is measured over different vocabularies: the random-init baseline is ln(97) ≈ 4.57 nats for char vs ln(50,257) ≈ 10.82 nats for BPE. **BPC is the fair metric**: convert each loss to bits-per-character via `bpc = val_loss / (ln(2) × avg_chars_per_token)`. For char, avg_chars_per_token = 1 (one token = one character), so BPC = 0.926 / ln(2) = **1.336**. For BPE, avg chars per token = 4.23, so BPC = (2.900 / 4.23) / ln(2) = **0.989**. BPE is **1.35× more efficient** — it compresses the same text into fewer bits, meaning the model extracts more structure per unit of compute.
 
 **Char sample** (prompt: "A vulnerability in", temp=0.9, top_k=50):
 > *A vulnerability in Oracle 1.4 and 6.2.4 allows remote attackers to obtain sensitive information using some commands that can a denial of service.*
@@ -307,6 +308,6 @@ Loss curves are saved automatically to `runs/<run_name>/loss_curve.png` after ea
 **Natural next steps:**
 1. **More data:** use the full ~360k CVE corpus (activate an NVD API key for fast download) or add GitHub Security Advisories (GHSA).
 2. **Longer training:** the Chinchilla scaling laws suggest ~600M tokens for a 30M-param model to be compute-optimal — we trained on 415k.
-3. **Flash Attention:** swap in `F.scaled_dot_product_attention` (PyTorch 2.0+) for a free ~2× attention speedup.
+3. ~~**Flash Attention**~~ — **done**: `model.py` uses `F.scaled_dot_product_attention` (PyTorch 2.0+) with an automatic fallback for older versions. Fuses scale → causal mask → softmax → dropout into one kernel, ~2× faster attention on long sequences.
 4. **Mixed precision:** `torch.autocast("cuda", dtype=torch.bfloat16)` halves memory and speeds training ~30% on CUDA.
 5. **Fine-tuning experiment:** take the pretrained base and fine-tune on CVSS score prediction — a natural next step for a security-focused portfolio.

@@ -90,17 +90,22 @@ class CausalSelfAttention(nn.Module):
         # Output projection — maps concatenated head outputs back to n_embd.
         self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=False)
 
-        self.attn_dropout = nn.Dropout(config.dropout)
+        self.attn_dropout_p = config.dropout  # kept for manual path
         self.resid_dropout = nn.Dropout(config.dropout)
 
-        # Causal mask: lower-triangular matrix of shape (block_size, block_size).
-        # Registered as a buffer so it moves to the right device with .to(device)
-        # but is NOT a learnable parameter.
-        self.register_buffer(
-            "mask",
-            torch.tril(torch.ones(config.block_size, config.block_size))
-            .view(1, 1, config.block_size, config.block_size)
-        )
+        # Flash Attention (PyTorch 2.0+) fuses the scale → mask → softmax →
+        # dropout → weighted-sum into a single CUDA/MPS kernel, avoiding the
+        # O(T²) materialisation of the full attention matrix in HBM. This is a
+        # free ~2× speedup on long sequences with no change to outputs.
+        self._use_flash = hasattr(F, "scaled_dot_product_attention")
+
+        if not self._use_flash:
+            # Fallback: manual causal mask for older PyTorch versions
+            self.register_buffer(
+                "mask",
+                torch.tril(torch.ones(config.block_size, config.block_size))
+                .view(1, 1, config.block_size, config.block_size)
+            )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, T, C = x.shape  # batch, sequence length, embedding dim
@@ -114,19 +119,21 @@ class CausalSelfAttention(nn.Module):
         k = k.view(B, T, self.n_head, self.head_size).transpose(1, 2)
         v = v.view(B, T, self.n_head, self.head_size).transpose(1, 2)
 
-        # Scaled dot-product attention
-        # Scale by 1/sqrt(head_size) to keep dot products from growing too large
-        # (large dot products → very peaked softmax → vanishing gradients).
-        scale = 1.0 / math.sqrt(self.head_size)
-        att = (q @ k.transpose(-2, -1)) * scale     # (B, n_head, T, T)
-
-        # Apply causal mask: positions beyond t are set to -inf → zero after softmax
-        att = att.masked_fill(self.mask[:, :, :T, :T] == 0, float("-inf"))
-        att = F.softmax(att, dim=-1)
-        att = self.attn_dropout(att)
-
-        # Weighted sum of values
-        y = att @ v                                  # (B, n_head, T, head_size)
+        if self._use_flash:
+            # Flash Attention: handles scaling, causal masking, and dropout
+            # internally. is_causal=True applies the lower-triangular mask.
+            dropout_p = self.attn_dropout_p if self.training else 0.0
+            y = F.scaled_dot_product_attention(
+                q, k, v, attn_mask=None, dropout_p=dropout_p, is_causal=True
+            )
+        else:
+            # Manual scaled dot-product attention (PyTorch < 2.0 fallback)
+            scale = 1.0 / math.sqrt(self.head_size)
+            att = (q @ k.transpose(-2, -1)) * scale     # (B, n_head, T, T)
+            att = att.masked_fill(self.mask[:, :, :T, :T] == 0, float("-inf"))
+            att = F.softmax(att, dim=-1)
+            att = F.dropout(att, p=self.attn_dropout_p, training=self.training)
+            y = att @ v
 
         # Concatenate heads and project back to n_embd
         y = y.transpose(1, 2).contiguous().view(B, T, C)
