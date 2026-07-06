@@ -179,11 +179,22 @@ Two tokenizers are implemented and configurable via `--tokenizer char` or `--tok
 | Vocab size | 97 | 50,257 |
 | Avg tokens per description | ~196 | ~46 |
 | Model params (6L-6H-384E) | ~11M | ~30M |
-| Val loss at 2000 steps | — | **2.90** |
-| Train/val gap at 2000 steps | — | 0.75 |
-| Sample quality | Learns spelling then words; coherent but slow to converge | Immediately works at word/phrase level; generates plausible CVE structure |
+| Training time (2000 steps) | **8.1 min** | 30.1 min |
+| Val loss at 2000 steps | **0.950** † | 2.900 † |
+| Train/val gap at 2000 steps | 0.074 | 0.752 |
+| Sample quality | Coherent words and CVE structure; slightly blurrier version numbers | Crisper word choice; better product/version specificity |
 
-**Which to use?** BPE is the practical default — shorter sequences let the model fit more semantic content into the context window, and the pre-built vocabulary gives an immediate head start on security terminology. Char-level is the better teaching tool: watching the model learn to spell "buffer overflow" character by character makes the pretraining objective viscerally clear.
+† **Val losses are not directly comparable.** Cross-entropy is measured over different vocabularies: the random-init baseline is ln(97) ≈ 4.57 nats for char vs ln(50,257) ≈ 10.82 nats for BPE. A fair comparison requires converting to bits-per-character, where both models are on equal footing.
+
+**Char sample** (prompt: "A vulnerability in", temp=0.9, top_k=50):
+> *A vulnerability in Oracle 1.4 and 6.2.4 allows remote attackers to obtain sensitive information using some commands that can a denial of service.*
+>
+> *A vulnerability in HTML 1.2.1b allows remote attackers to inject arbitrary web script or HTML via the tastring interface file.*
+
+**BPE sample** (same prompt):
+> *A vulnerability in BSD-based operating systems allows local users to gain additional privileges. Oracle 9i with the NetAOLVOS Application Server 1.2.1.0.2 and earlier creates predictable names and stores a cleartext in the registry by the PATH environment variable.*
+
+**Which to use?** BPE is the practical default — shorter sequences let the model fit more semantic content into the context window, trains 3.7× slower per run but sees far more meaning per token. Char is the better teaching tool: watching the model learn to spell "buffer overflow" from individual characters makes the pretraining objective viscerally clear, and it trains much faster per step.
 
 ---
 
