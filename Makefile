@@ -1,4 +1,4 @@
-.PHONY: prepare prepare-small train-bpe train-char train-small sample scale plot help
+.PHONY: prepare prepare-small train-bpe train-char train-small eval sample scale plot help
 
 # Reduce batch_size from the config default of 64 to 16 to fit in MPS/GPU memory.
 # Override with: make train-bpe BATCH=32
@@ -32,6 +32,10 @@ scale:
 	python train.py --config configs/scale_depth.py --tokenizer bpe \
 	  --run_name scale_deep     --batch_size $(BATCH) --max_iters $(ITERS)
 
+# ── Evaluation ────────────────────────────────────────────────────────────────
+eval:
+	python eval.py --run_name scale_baseline_bpe default_char_char
+
 # ── Sampling ──────────────────────────────────────────────────────────────────
 sample:
 	python sample.py --run_name default_bpe --prompt "A vulnerability in"
@@ -57,6 +61,7 @@ help:
 	@echo "  make train-char       Train default config with char tokenizer"
 	@echo "  make train-small      Train tiny config (CPU-friendly)"
 	@echo "  make scale            Run baseline + deep configs for scaling exp"
+	@echo "  make eval             Compute BPC/perplexity for BPE and char checkpoints"
 	@echo "  make sample           Generate text from BPE checkpoint"
 	@echo "  make sample-char      Generate text from char checkpoint"
 	@echo "  make plot             Regenerate BPE loss_curve.png"

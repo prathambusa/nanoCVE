@@ -10,6 +10,8 @@ What this script does
      - AdamW optimizer (separate weight-decay groups)
      - Cosine LR schedule with linear warmup
      - Gradient clipping
+     - Gradient accumulation (simulate large batches without the memory cost)
+     - Automatic mixed precision (bfloat16 on CUDA, float32 on MPS/CPU)
      - Periodic evaluation on the val set
      - Loss logging to runs/<run_name>/losses.csv
      - Best-checkpoint saving (by val loss)
@@ -20,6 +22,7 @@ Usage
   python train.py --config configs/default.py --tokenizer bpe
   python train.py --config configs/small.py   --tokenizer char
   python train.py --config configs/default.py --tokenizer bpe --max_iters 1000
+  python train.py --config configs/default.py --tokenizer bpe --grad_accum 4
 
 All config fields can be overridden from the command line via --<field> <value>.
 """
@@ -269,10 +272,39 @@ def train(cfg, tokenizer_name: str) -> None:
     best_ckpt_path = run_dir / "ckpt_best.pt"
 
     # ── Training loop ─────────────────────────────────────────────────────────
+    grad_accum = cfg.grad_accum
+    eff_batch = cfg.batch_size * grad_accum
     print(f"\n{'='*60}")
-    print(f"Training for {cfg.max_iters} steps  |  batch={cfg.batch_size}  |  "
+    print(f"Training for {cfg.max_iters} steps  |  "
+          f"batch={cfg.batch_size}×{grad_accum}={eff_batch}  |  "
           f"block={cfg.block_size}  |  tokenizer={tokenizer_name}")
     print(f"{'='*60}\n")
+
+    # ── Mixed precision setup ─────────────────────────────────────────────────
+    # bfloat16 on CUDA: halves memory, ~30% faster matmuls, no loss scaling needed
+    # (bfloat16 has the same exponent range as float32, unlike float16).
+    # MPS and CPU stay in float32 — bfloat16 support is incomplete on MPS.
+    use_amp = (device.type == "cuda")
+    amp_dtype = torch.bfloat16
+    # bfloat16 has the same exponent range as float32, so no GradScaler needed.
+    autocast_ctx = (
+        torch.autocast(device_type="cuda", dtype=amp_dtype)
+        if use_amp else
+        torch.autocast(device_type="cpu", enabled=False)  # no-op context
+    )
+    if use_amp:
+        print(f"Mixed precision: bfloat16 (CUDA)")
+    else:
+        print(f"Mixed precision: disabled (float32 on {device.type})")
+
+    # ── Gradient accumulation ─────────────────────────────────────────────────
+    # Accumulate gradients over `grad_accum` micro-batches before stepping.
+    # Effective batch size = batch_size × grad_accum.
+    # This lets us simulate large batches (e.g. 64) on hardware that only fits
+    # small ones (e.g. 16) without changing the learning dynamics.
+    if grad_accum > 1:
+        print(f"Gradient accumulation: {grad_accum} steps "
+              f"(effective batch = {cfg.batch_size * grad_accum})")
 
     model.train()
     t_start = time.time()
@@ -322,12 +354,19 @@ def train(cfg, tokenizer_name: str) -> None:
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr
 
-        # ── Forward + backward ────────────────────────────────────────────────
-        x, y = train_ds.get_batch(cfg.batch_size, device)
-        _, loss = model(x, y)
-
+        # ── Forward + backward (with gradient accumulation) ───────────────────
         optimizer.zero_grad(set_to_none=True)
-        loss.backward()
+        accum_loss = 0.0
+
+        for micro_step in range(grad_accum):
+            x, y = train_ds.get_batch(cfg.batch_size, device)
+            with autocast_ctx:
+                _, loss = model(x, y)
+            # Scale loss so gradients are averaged across accumulation steps,
+            # not summed — keeps the effective LR independent of grad_accum.
+            loss = loss / grad_accum
+            loss.backward()
+            accum_loss += loss.item()
 
         # Gradient clipping prevents occasional large gradient spikes from
         # destabilising training. 1.0 is the standard threshold for GPT models.
@@ -399,6 +438,8 @@ def main():
     parser.add_argument("--eval_interval", type=int,   default=None)
     parser.add_argument("--eval_iters",    type=int,   default=None)
     parser.add_argument("--learning_rate", type=float, default=None)
+    parser.add_argument("--grad_accum",    type=int,   default=None,
+                        help="Gradient accumulation steps (effective_batch = batch_size × grad_accum)")
     parser.add_argument("--seed",          type=int,   default=None)
 
     args = parser.parse_args()

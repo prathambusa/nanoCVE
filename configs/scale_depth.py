@@ -24,6 +24,7 @@ class Config:
     min_lr: float = 3e-5
     grad_clip: float = 1.0
     weight_decay: float = 0.1
+    grad_accum: int = 1
 
     # Misc
     tokenizer: str = "bpe"

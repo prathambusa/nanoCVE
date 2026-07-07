@@ -99,7 +99,7 @@ def generate(
 
     # Rebuild model and load weights
     model = GPT(model_cfg).to(device)
-    model.load_state_dict(ckpt["model_state"])
+    model.load_state_dict(ckpt["model_state"], strict=False)
     model.eval()
 
     tok = get_tokenizer(tokenizer_name)

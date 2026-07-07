@@ -213,7 +213,26 @@ The training loop in `train.py` is written entirely by hand — no Trainer, Ligh
 
 **Checkpointing:** the model with the best validation loss is saved to `runs/<run_name>/ckpt_best.pt`. Checkpoints include model state, optimizer state, config dict, and tokenizer name for full reproducibility.
 
+**Gradient accumulation:** pass `--grad_accum N` to accumulate gradients over N micro-batches before stepping. Effective batch size = `batch_size × grad_accum`. This recovers large-batch training dynamics on hardware that can only fit small batches — e.g. `--batch_size 16 --grad_accum 4` gives the same effective batch of 64 as the original config without OOM.
+
+**Mixed precision:** on CUDA, training runs in `bfloat16` via `torch.autocast`, halving memory and speeding up matmuls ~30%. bfloat16 has the same exponent range as float32, so no gradient scaler is needed. MPS and CPU fall back to float32 automatically.
+
 **Logging:** train and val loss are written to `runs/<run_name>/losses.csv` at every eval interval. A `loss_curve.png` is generated automatically at the end of training.
+
+**Evaluation:** `eval.py` loads any checkpoint and reports cross-entropy loss, perplexity, and bits-per-character on the full val set:
+
+```
+python eval.py --run_name scale_baseline_bpe default_char_char
+```
+
+```
+Run                          Tok    Step  Val loss  Perplexity     BPC
+----------------------------------------------------------------------
+scale_baseline_bpe           bpe    2000    2.9265       18.66  0.9982
+default_char_char            char   1800    0.9451        2.57  1.3635
+
+scale_baseline_bpe is 1.37× more efficient in bits/char
+```
 
 ---
 
@@ -309,5 +328,5 @@ Loss curves are saved automatically to `runs/<run_name>/loss_curve.png` after ea
 1. **More data:** use the full ~360k CVE corpus (activate an NVD API key for fast download) or add GitHub Security Advisories (GHSA).
 2. **Longer training:** the Chinchilla scaling laws suggest ~600M tokens for a 30M-param model to be compute-optimal — we trained on 415k.
 3. ~~**Flash Attention**~~ — **done**: `model.py` uses `F.scaled_dot_product_attention` (PyTorch 2.0+) with an automatic fallback for older versions. Fuses scale → causal mask → softmax → dropout into one kernel, ~2× faster attention on long sequences.
-4. **Mixed precision:** `torch.autocast("cuda", dtype=torch.bfloat16)` halves memory and speeds training ~30% on CUDA.
+4. ~~**Mixed precision**~~ — **done**: `train.py` uses `torch.autocast(bfloat16)` on CUDA automatically. MPS/CPU fall back to float32.
 5. **Fine-tuning experiment:** take the pretrained base and fine-tune on CVSS score prediction — a natural next step for a security-focused portfolio.
